@@ -153,7 +153,7 @@ def test_failures_retried_once_then_reported(world):
     r = actions.confirm(p["code"], factory)
     assert r["done"] == 29 and r["failed"] == 1
     assert "new1" in in_trash(fakes["personal"]) and "new2" not in in_trash(fakes["personal"])
-    assert sum(1 for op, mid in fakes["personal"].calls if mid == "new2") == 3  # tried, then 2 retries
+    assert sum(1 for op, mid in fakes["personal"].calls if mid == "new2") == 4  # tried, then 3 retries
 
 
 def test_second_preview_of_same_mail_skips_and_undo_keeps_first(world):
