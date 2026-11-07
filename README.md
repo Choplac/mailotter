@@ -28,7 +28,7 @@ It deliberately stays under Gmail's per-account speed limit, so big jobs take ti
 ## Install
 
 ```bash
-pipx install git+https://github.com/ChengxuanHuang/mailotter
+pipx install git+https://github.com/Choplac/mailotter
 ```
 
 ## One-time Google setup (about 15 minutes)
