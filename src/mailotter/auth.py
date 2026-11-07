@@ -1,7 +1,8 @@
 """Google sign-in, one token per account.
 
-MailOtter asks Google only for the `gmail.modify` scope: read, label, archive
-and move to Trash. That scope cannot send mail and cannot permanently delete.
+MailOtter asks Google only for the `gmail.modify` scope (read, label, archive,
+Trash). That scope cannot permanently delete. It *would* allow sending, so the
+no-send guarantee comes from MailOtter's code: it has no send function at all.
 """
 
 from __future__ import annotations

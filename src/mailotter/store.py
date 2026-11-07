@@ -8,9 +8,12 @@ Everything is written owner-only (0600 files, 0700 dirs).
 
 from __future__ import annotations
 
+import contextlib
+import fcntl
 import json
 import os
 import re
+import secrets
 from pathlib import Path
 
 ALIAS_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}$")
@@ -48,12 +51,24 @@ def client_secret_path() -> Path:
 
 def write_private(path: Path, text: str) -> None:
     """Write a file that only the owner can read, without a readable window."""
-    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.{secrets.token_hex(4)}.tmp")
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w", encoding="utf-8") as f:
         f.write(text)
     os.chmod(tmp, 0o600)
     os.replace(tmp, path)
+
+
+@contextlib.contextmanager
+def locked():
+    """Inter-process lock for MailOtter state (pending previews, history)."""
+    fd = os.open(state_dir() / "lock", os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
 
 
 def read_json(path: Path, default):

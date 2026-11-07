@@ -7,3 +7,7 @@ build/
 # never commit Google keys or tokens
 client_secret*.json
 *token*.json
+# MailOtter runtime files, in case MAILOTTER_HOME points inside a checkout
+tokens/
+state/
+accounts.json

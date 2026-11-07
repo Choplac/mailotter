@@ -9,13 +9,18 @@ from .actions import MailboxFactory, default_factory
 
 
 def search_all(account: str, query: str, limit: int = 20, factory: MailboxFactory = default_factory) -> dict:
-    results, errors = [], {}
+    results, errors, unreadable = [], {}, 0
     for alias in store.resolve(account):
         try:
-            results.extend(factory(alias).search(query, limit))
+            found, bad = factory(alias).search(query, limit)
         except Exception as exc:  # one broken account shouldn't hide the others
             errors[alias] = str(exc)
+            continue
+        results.extend(found)
+        unreadable += bad
     out = {"count": len(results), "results": results}
+    if unreadable:
+        out["note"] = f"{unreadable} matching emails could not be loaded (Gmail busy). Try again shortly."
     if errors:
         out["errors"] = errors
     return out
@@ -35,12 +40,14 @@ def senders_report(
     scanned, partial, errors = {}, [], {}
     for alias in store.resolve(account):
         try:
-            counts, n, more = factory(alias).top_senders(query, sample)
+            counts, n, more, bad = factory(alias).top_senders(query, sample)
         except Exception as exc:
             errors[alias] = str(exc)
             continue
         total.update(counts)
         scanned[alias] = n
+        if bad:
+            errors[alias] = f"{bad} emails could not be loaded (Gmail busy); counts are slightly low"
         if more:
             partial.append(alias)
     out = {

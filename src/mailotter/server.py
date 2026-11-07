@@ -39,8 +39,8 @@ def read_mail(account: str, message_id: str) -> dict:
 
 
 @mcp.tool(annotations=READ)
-def top_senders(account: str = "all", query: str = "in:inbox", sample: int = 300, show: int = 25) -> dict:
-    """Who sends the most mail, counted over the newest `sample` matching emails per account."""
+def top_senders(account: str = "all", query: str = "in:inbox", sample: int = 200, show: int = 25) -> dict:
+    """Who sends the most mail, counted over the newest `sample` matching emails per account (about 1 minute per 250 emails, to respect Gmail limits)."""
     return senders_report(account, query, max(10, min(sample, 2000)), max(1, min(show, 100)))
 
 

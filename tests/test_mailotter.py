@@ -25,7 +25,7 @@ def world(tmp_path, monkeypatch):
         "personal": FakeGmail(msgs(30, "news@shop.com") + msgs(3, "mom@family.com", "dinner")),
         "old": FakeGmail(msgs(12, "news@shop.com", start=100) + msgs(2, "bank@bank.com", "statement")),
     }
-    factory = lambda alias: Mailbox(alias, fakes[alias], pause=0)
+    factory = lambda alias: Mailbox(alias, fakes[alias], throttle=False)
     return fakes, factory
 
 
@@ -128,7 +128,7 @@ def test_undo_restores_everything(world):
     assert u["undid"] == r["id"] and u["restored"] == 42
     assert not in_trash(fakes["personal"]) and not in_trash(fakes["old"])
     assert actions.history()[0]["undone"] is True
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="fully undone"):
         actions.undo(r["id"], factory)
 
 
@@ -153,6 +153,86 @@ def test_failures_retried_once_then_reported(world):
     r = actions.confirm(p["code"], factory)
     assert r["done"] == 29 and r["failed"] == 1
     assert "new1" in in_trash(fakes["personal"]) and "new2" not in in_trash(fakes["personal"])
+    assert sum(1 for op, mid in fakes["personal"].calls if mid == "new2") == 3  # tried, then 2 retries
+
+
+def test_second_preview_of_same_mail_skips_and_undo_keeps_first(world):
+    fakes, factory = world
+    p1 = actions.preview("trash", "personal", "from:mom@family.com", factory)
+    p2 = actions.preview("trash", "personal", "from:mom@family.com", factory)
+    r1 = actions.confirm(p1["code"], factory)
+    r2 = actions.confirm(p2["code"], factory)
+    assert r1["done"] == 3 and r2["done"] == 0 and r2["skipped_already_changed"] == 3
+    with pytest.raises(ValueError):
+        actions.undo(r2["id"], factory)          # it changed nothing, so nothing to undo
+    assert len(in_trash(fakes["personal"])) == 3
+
+
+def test_unreachable_account_changes_nothing(world):
+    fakes, factory = world
+    p = actions.preview("trash", "all", "from:news@shop.com", factory)
+
+    def broken(alias):
+        if alias == "personal":
+            raise RuntimeError("token revoked")
+        return factory(alias)
+
+    with pytest.raises(RuntimeError, match="Nothing was changed"):
+        actions.confirm(p["code"], broken)
+    assert not in_trash(fakes["personal"]) and not in_trash(fakes["old"])
+
+
+def test_failed_undo_can_be_retried(world):
+    fakes, factory = world
+    p = actions.preview("trash", "personal", "from:mom@family.com", factory)
+    r = actions.confirm(p["code"], factory)
+    fakes["personal"].fail_ids = {"mom1"}
+    u = actions.undo(r["id"], factory)
+    assert u["restored"] == 2 and u["still_to_restore"] == 1
+    assert actions.history()[0]["partly_undone"] is True
+    fakes["personal"].fail_ids = set()
+    u2 = actions.undo(r["id"], factory)
+    assert u2["restored"] == 1 and u2["still_to_restore"] == 0
+    assert not in_trash(fakes["personal"])
+
+
+def test_crash_mid_action_is_still_undoable(world):
+    fakes, factory = world
+
+    class Crashy(Mailbox):
+        def trash(self, ids):
+            super().trash(ids[:2])
+            raise ConnectionError("network died")
+
+    p = actions.preview("trash", "personal", "from:mom@family.com", factory)
+    r = actions.confirm(p["code"], lambda a: Crashy(a, fakes[a], throttle=False))
+    assert "Stopped early" in r["error"]
+    assert len(in_trash(fakes["personal"])) == 2
+    actions.undo(r["id"], factory)
+    assert not in_trash(fakes["personal"])
+
+
+def test_journal_written_before_any_change(world, monkeypatch):
+    fakes, factory = world
+    p = actions.preview("trash", "personal", "from:mom@family.com", factory)
+    seen = []
+    real_trash = Mailbox.trash
+
+    def spy(self, ids):
+        seen.append(actions._log_path().read_text())
+        return real_trash(self, ids)
+
+    monkeypatch.setattr(Mailbox, "trash", spy)
+    actions.confirm(p["code"], factory)
+    assert '"targets"' in seen[0]
+
+
+def test_gitignore_covers_runtime_files():
+    from pathlib import Path
+
+    text = (Path(__file__).parent.parent / ".gitignore").read_text()
+    for pat in ("tokens/", "state/", "accounts.json", "client_secret*.json"):
+        assert pat in text
 
 
 def test_mailbox_has_no_send_or_delete():

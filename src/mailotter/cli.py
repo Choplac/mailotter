@@ -88,7 +88,10 @@ def _two_step(action, a):
     if not a.yes and input("Go ahead? Type 'yes': ").strip().lower() != "yes":
         return print("Nothing changed.")
     r = actions.confirm(p["code"])
-    print(f"Done: {r['done']} emails ({r['id']}). Failed: {r['failed']}. Undo with: mailotter undo {r['id']}")
+    print(f"Done: {r['done']} emails ({r['id']}). Failed: {r['failed']}. Skipped (already changed): {r['skipped_already_changed']}.")
+    if r.get("error"):
+        print(r["error"])
+    print(f"Undo with: mailotter undo {r['id']}")
 
 
 def cmd_trash(a):
@@ -101,12 +104,14 @@ def cmd_archive(a):
 
 def cmd_undo(a):
     r = actions.undo(a.op_id)
-    print(f"Undid {r['undid']}: restored {r['restored']} emails. Failed: {r['failed']}.")
+    print(f"Undid {r['undid']}: restored {r['restored']} emails. Still to restore: {r['still_to_restore']}.")
+    if r.get("next"):
+        print(r["next"])
 
 
 def cmd_history(a):
     for op in actions.history(a.limit):
-        flag = " (undone)" if op["undone"] else ""
+        flag = " (undone)" if op["undone"] else " (partly undone)" if op["partly_undone"] else ""
         print(f"{op['id']}  {op['time']}  {op['action']:8} {op['done']:5}  {op['query']}{flag}")
 
 
@@ -152,7 +157,7 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("top-senders", help="who fills your inbox")
     s.add_argument("-a", "--account", default="all")
     s.add_argument("-q", "--query", default="in:inbox")
-    s.add_argument("--sample", type=int, default=500)
+    s.add_argument("--sample", type=int, default=200)
     s.add_argument("--show", type=int, default=25)
     s.add_argument("--json", action="store_true")
     s.set_defaults(fn=cmd_top)

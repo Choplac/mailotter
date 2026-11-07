@@ -4,17 +4,21 @@ googleapiclient Gmail service, so tests can pass a fake."""
 from __future__ import annotations
 
 import base64
+import re
 import time
 from collections import Counter
 from email.utils import parseaddr
 from html import unescape
-import re
 
-GET_BATCH = 50          # Gmail recommends at most 50 calls per batch
-TRASH_BATCH = 50
+BATCH = 50              # Gmail recommends at most 50 calls per batch
 MODIFY_CHUNK = 1000     # batchModify limit
-PAUSE = 1.0             # seconds between batches, keeps us under per-user quota
 BODY_LIMIT = 20_000
+
+# Gmail quota units per call (developers.google.com/workspace/gmail/api/reference/quota)
+COST = {"list": 5, "get": 20, "get_full": 60, "trash": 20, "untrash": 5, "batchModify": 50}
+# Google allows 6,000 units per user per minute; stay safely below it.
+UNITS_PER_SECOND = 90.0
+RETRY_WAITS = (20.0, 60.0)  # seconds before retrying failed requests (quota recovers per minute)
 
 
 def _chunks(items, size):
@@ -73,14 +77,56 @@ def _body(payload: dict) -> tuple[str, list[str]]:
 
 
 class Mailbox:
-    def __init__(self, alias: str, service, pause: float = PAUSE):
+    def __init__(self, alias: str, service, throttle: bool = True):
         self.alias = alias
         self.svc = service
-        self.pause = pause
+        self.throttle = throttle
+        self._next = 0.0  # earliest time the next request may start
 
     @property
     def _msgs(self):
         return self.svc.users().messages()
+
+    def _spend(self, units: float) -> None:
+        """Pace requests so this account stays under Gmail's per-user quota."""
+        if not self.throttle:
+            return
+        now = time.monotonic()
+        if self._next > now:
+            time.sleep(self._next - now)
+            now = self._next
+        self._next = now + units / UNITS_PER_SECOND
+
+    def _wait(self, seconds: float) -> None:
+        if self.throttle:
+            time.sleep(seconds)
+
+    def _batched(self, ids: list[str], make, cost: int) -> tuple[dict, list[str]]:
+        """One request per id, in paced batches, retrying failures after waits.
+        Returns ({id: response}, [ids that still failed])."""
+        ok: dict[str, dict] = {}
+        todo = list(ids)
+        for attempt in range(len(RETRY_WAITS) + 1):
+            if attempt:
+                self._wait(RETRY_WAITS[attempt - 1])
+            failed: list[str] = []
+            for chunk in _chunks(todo, BATCH):
+                self._spend(cost * len(chunk))
+                batch = self.svc.new_batch_http_request()
+
+                def cb(request_id, response, exception):
+                    if exception is None:
+                        ok[request_id] = response
+                    else:
+                        failed.append(request_id)
+
+                for mid in chunk:
+                    batch.add(make(mid), callback=cb, request_id=mid)
+                batch.execute()
+            todo = failed
+            if not todo:
+                break
+        return ok, todo
 
     # ---- finding ----------------------------------------------------------
 
@@ -88,6 +134,7 @@ class Mailbox:
         """Message ids matching query, up to cap. Second value: more exist."""
         out, token = [], None
         while True:
+            self._spend(COST["list"])
             resp = self._msgs.list(
                 userId="me", q=query, maxResults=min(500, cap + 1 - len(out)), pageToken=token
             ).execute()
@@ -98,33 +145,24 @@ class Mailbox:
             if not token:
                 return out, False
 
-    def _get_many(self, ids: list[str], fmt: str = "metadata") -> list[dict]:
-        found: dict[str, dict] = {}
-        for i, chunk in enumerate(_chunks(ids, GET_BATCH)):
-            if i and self.pause:
-                time.sleep(self.pause)
-            batch = self.svc.new_batch_http_request()
+    def _get_many(self, ids: list[str]) -> tuple[list[dict], int]:
+        """Metadata for ids, in order. Second value: how many could not be read."""
+        found, failed = self._batched(
+            ids,
+            lambda mid: self._msgs.get(
+                userId="me", id=mid, format="metadata", metadataHeaders=["From", "Subject", "Date"]
+            ),
+            COST["get"],
+        )
+        return [found[m] for m in ids if m in found], len(failed)
 
-            def cb(request_id, response, exception):
-                if exception is None and response:
-                    found[request_id] = response
-
-            for mid in chunk:
-                batch.add(
-                    self._msgs.get(
-                        userId="me", id=mid, format=fmt, metadataHeaders=["From", "Subject", "Date"]
-                    ),
-                    callback=cb,
-                    request_id=mid,
-                )
-            batch.execute()
-        return [found[m] for m in ids if m in found]
-
-    def search(self, query: str, limit: int = 20) -> list[dict]:
+    def search(self, query: str, limit: int = 20) -> tuple[list[dict], int]:
         ids, _ = self.ids(query, limit)
-        return [_summary(self.alias, m) for m in self._get_many(ids)]
+        msgs, unreadable = self._get_many(ids)
+        return [_summary(self.alias, m) for m in msgs], unreadable
 
     def read(self, message_id: str) -> dict:
+        self._spend(COST["get_full"])
         msg = self._msgs.get(userId="me", id=message_id, format="full").execute()
         text, files = _body(msg.get("payload"))
         out = _summary(self.alias, msg)
@@ -135,50 +173,37 @@ class Mailbox:
         )
         return out
 
-    def top_senders(self, query: str, sample: int) -> tuple[Counter, int, bool]:
+    def top_senders(self, query: str, sample: int) -> tuple[Counter, int, bool, int]:
         ids, more = self.ids(query, sample)
+        msgs, unreadable = self._get_many(ids)
         counts: Counter = Counter()
-        for msg in self._get_many(ids):
+        for msg in msgs:
             name, addr = parseaddr(_headers(msg).get("from", ""))
             counts[(addr or name or "(unknown)").lower()] += 1
-        return counts, len(ids), more
+        return counts, len(msgs), more, unreadable
 
     # ---- changing (all reversible) ---------------------------------------
 
-    def _each(self, ids: list[str], make) -> tuple[list[str], list[str]]:
-        """Run one request per id in batches; retry failures once."""
-        done: list[str] = []
-        todo = list(ids)
-        for attempt in range(2):
-            failed: list[str] = []
-            for i, chunk in enumerate(_chunks(todo, TRASH_BATCH)):
-                if (i or attempt) and self.pause:
-                    time.sleep(self.pause * (2 if attempt else 1))
-                batch = self.svc.new_batch_http_request()
-
-                def cb(request_id, response, exception):
-                    (failed if exception is not None else done).append(request_id)
-
-                for mid in chunk:
-                    batch.add(make(mid), callback=cb, request_id=mid)
-                batch.execute()
-            todo = failed
-            if not todo:
-                break
-        return done, todo
-
     def trash(self, ids: list[str]):
-        return self._each(ids, lambda mid: self._msgs.trash(userId="me", id=mid))
+        ok, failed = self._batched(ids, lambda mid: self._msgs.trash(userId="me", id=mid), COST["trash"])
+        return [m for m in ids if m in ok], failed
 
     def untrash(self, ids: list[str]):
-        return self._each(ids, lambda mid: self._msgs.untrash(userId="me", id=mid))
+        ok, failed = self._batched(ids, lambda mid: self._msgs.untrash(userId="me", id=mid), COST["untrash"])
+        return [m for m in ids if m in ok], failed
 
     def _relabel(self, ids: list[str], add: list[str], remove: list[str]):
+        done: list[str] = []
         for chunk in _chunks(ids, MODIFY_CHUNK):
-            self._msgs.batchModify(
-                userId="me", body={"ids": chunk, "addLabelIds": add, "removeLabelIds": remove}
-            ).execute()
-        return list(ids), []
+            self._spend(COST["batchModify"])
+            try:
+                self._msgs.batchModify(
+                    userId="me", body={"ids": chunk, "addLabelIds": add, "removeLabelIds": remove}
+                ).execute()
+            except Exception:
+                return done, [m for m in ids if m not in set(done)]
+            done.extend(chunk)
+        return done, []
 
     def archive(self, ids: list[str]):
         return self._relabel(ids, [], ["INBOX"])

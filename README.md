@@ -13,12 +13,15 @@ MailOtter lets your AI assistant (Claude, or any MCP client) search and clean up
 
 And what it **can't** do, by design:
 
-- ✉️ **It can't send email.** It only asks Google for `gmail.modify`, which can't send.
+- ✉️ **It can't send email.** MailOtter has no send function at all. (Honest note: Google's `gmail.modify` permission, which MailOtter needs for Trash, would technically allow sending. The guarantee comes from MailOtter's code, which tests check.)
 - 🔥 **It can't permanently delete.** Mail goes to Trash, which you can recover for 30 days.
 - 🧩 **It can't do half a job.** If a search matches more than the limit (2,000 by default), it refuses and changes nothing.
-- ⏱️ **It can't act on stale previews.** A preview code works once, for 15 minutes, on exactly the emails it showed. Mail that arrives later is never touched.
+- ⏱️ **It can't act on stale previews.** A preview code works once, for 15 minutes, on exactly the emails it showed. Mail that arrives later is never touched, and mail already changed since the preview is skipped.
+- 🔌 **It can't half-connect.** Every account is reached before anything changes. A crash mid-way still leaves a journal, so `undo` works.
 
-It runs on your own computer. Your mail goes only between your computer and Google.
+It runs on your own computer (Linux, macOS or WSL). Your mail goes only between your computer and Google.
+
+It deliberately stays under Gmail's per-account speed limit, so big jobs take time: about 5 minutes to trash 1,000 emails, and about 1 minute to scan 250 for top senders.
 
 ## Install
 
