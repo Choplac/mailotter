@@ -19,7 +19,7 @@ COST = {"list": 5, "get": 20, "get_full": 60, "trash": 20, "untrash": 5, "batchM
 # Google allows 6,000 units per user per minute, but pushes back well before that in
 # practice (a 1,500-email trash at 90 units/s saw ~18% "slow down" errors). Stay at half.
 UNITS_PER_SECOND = 50.0
-RETRY_WAITS = (20.0, 60.0)
+RETRY_WAITS = (30.0, 90.0, 180.0)
 _NEXT_FREE: dict[str, float] = {}  # per account: earliest start of the next request (this process)  # seconds before retrying failed requests (quota recovers per minute)
 
 
