@@ -1,4 +1,6 @@
-# 🦦 MailOtter
+<p align="center"><img src="assets/logo.png" width="180" alt="MailOtter logo"></p>
+
+<h1 align="center">MailOtter</h1>
 
 **A little help for a lot of mail.**
 

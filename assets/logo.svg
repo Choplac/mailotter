@@ -1,0 +1,47 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="MailOtter logo">
+  <defs>
+    <clipPath id="badge"><circle cx="256" cy="256" r="240"/></clipPath>
+    <linearGradient id="sea" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2BB3C0"/>
+      <stop offset="1" stop-color="#0B6E7A"/>
+    </linearGradient>
+  </defs>
+  <circle cx="256" cy="256" r="240" fill="url(#sea)"/>
+  <g clip-path="url(#badge)">
+    <!-- body -->
+    <ellipse cx="256" cy="440" rx="165" ry="140" fill="#7A4A2E"/>
+    <!-- head -->
+    <circle cx="128" cy="168" r="20" fill="#7A4A2E"/>
+    <circle cx="384" cy="168" r="20" fill="#7A4A2E"/>
+    <circle cx="130" cy="170" r="10" fill="#4E2E1B"/>
+    <circle cx="382" cy="170" r="10" fill="#4E2E1B"/>
+    <ellipse cx="256" cy="218" rx="148" ry="104" fill="#8C5835"/>
+    <!-- face -->
+    <ellipse cx="256" cy="262" rx="104" ry="56" fill="#E8C9A0"/>
+    <ellipse cx="206" cy="196" rx="15" ry="17" fill="#1E1410"/>
+    <ellipse cx="306" cy="196" rx="15" ry="17" fill="#1E1410"/>
+    <circle cx="211" cy="190" r="5" fill="#fff"/>
+    <circle cx="311" cy="190" r="5" fill="#fff"/>
+    <ellipse cx="180" cy="236" rx="16" ry="9" fill="#F2A3A0" opacity=".7"/>
+    <ellipse cx="332" cy="236" rx="16" ry="9" fill="#F2A3A0" opacity=".7"/>
+    <path d="M236 236 Q256 226 276 236 Q272 254 256 258 Q240 254 236 236Z" fill="#2A1A12"/>
+    <path d="M256 258 v10 M256 268 q-12 12 -24 4 M256 268 q12 12 24 4" stroke="#2A1A12" stroke-width="5" fill="none" stroke-linecap="round"/>
+    <g stroke="#FFF3E0" stroke-width="3" stroke-linecap="round" opacity=".9">
+      <path d="M196 262 L150 252 M196 272 L148 276"/>
+      <path d="M316 262 L362 252 M316 272 L364 276"/>
+    </g>
+    <!-- envelope -->
+    <g transform="rotate(-6 256 360)">
+      <rect x="160" y="310" width="192" height="122" rx="14" fill="#FFFFFF"/>
+      <path d="M164 318 L256 384 L348 318Z" fill="#DFF4F6" stroke="#0B6E7A" stroke-width="8" stroke-linejoin="round"/>
+      <circle cx="256" cy="384" r="15" fill="#FF7A59"/>
+    </g>
+    <!-- paws -->
+    <ellipse cx="170" cy="322" rx="30" ry="24" fill="#8C5835"/>
+    <ellipse cx="342" cy="312" rx="30" ry="24" fill="#8C5835"/>
+    <!-- water -->
+    <path d="M0 420 Q64 396 128 420 T256 420 T384 420 T512 420 V512 H0Z" fill="#7FDDE6" opacity=".85"/>
+    <path d="M0 452 Q64 430 128 452 T256 452 T384 452 T512 452 V512 H0Z" fill="#2BB3C0"/>
+  </g>
+  <circle cx="256" cy="256" r="240" fill="none" stroke="#08525B" stroke-width="10"/>
+</svg>
