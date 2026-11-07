@@ -60,9 +60,10 @@ def write_private(path: Path, text: str) -> None:
 
 
 @contextlib.contextmanager
-def locked():
-    """Inter-process lock for MailOtter state (pending previews, history)."""
-    fd = os.open(state_dir() / "lock", os.O_RDWR | os.O_CREAT, 0o600)
+def locked(name: str = "lock"):
+    """Inter-process lock. 'lock' guards state files; 'changes' is held for a
+    whole confirm or undo so two of them never interleave."""
+    fd = os.open(state_dir() / name, os.O_RDWR | os.O_CREAT, 0o600)
     try:
         fcntl.flock(fd, fcntl.LOCK_EX)
         yield

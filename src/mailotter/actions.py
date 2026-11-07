@@ -124,6 +124,11 @@ def _append(rec: dict) -> None:
 
 
 def confirm(code: str, factory: MailboxFactory = default_factory) -> dict:
+    with store.locked("changes"):
+        return _confirm(code, factory)
+
+
+def _confirm(code: str, factory: MailboxFactory) -> dict:
     with store.locked():  # consume the code atomically: it can never run twice
         pending = _load_pending()
         plan = pending.pop(code, None)
@@ -138,9 +143,14 @@ def confirm(code: str, factory: MailboxFactory = default_factory) -> dict:
     for alias, frozen in plan["plans"].items():
         try:
             boxes[alias] = box = factory(alias)
-            now, _ = box.ids(q, len(frozen) + max_batch() * 5)
+            now, more = box.ids(q, len(frozen) + max_batch() * 5)
         except Exception as exc:
             raise RuntimeError(f"Could not reach '{alias}' ({exc}). Nothing was changed; preview again.") from exc
+        if more:
+            raise RuntimeError(
+                f"So much new matching mail arrived in '{alias}' that the preview can't be re-checked. "
+                "Nothing was changed; preview again."
+            )
         live = set(now)
         targets[alias] = [m for m in frozen if m in live]
         skipped += len(frozen) - len(targets[alias])
@@ -171,10 +181,15 @@ def _ops() -> dict[str, dict]:
     ops: dict[str, dict] = {}
     if not path.exists():
         return ops
-    for line in path.read_text(encoding="utf-8").splitlines():
+    with store.locked():
+        lines = path.read_text(encoding="utf-8").splitlines()
+    for line in lines:
         if not line.strip():
             continue
-        rec = json.loads(line)
+        try:
+            rec = json.loads(line)
+        except json.JSONDecodeError:  # a record cut off by a crash; the rest still counts
+            continue
         if "op" in rec:
             ops[rec["op"]] = {
                 "id": rec["op"], "time": rec["time"], "action": rec["action"], "query": rec["query"],
@@ -232,6 +247,11 @@ def history(limit: int = 10) -> list[dict]:
 
 
 def undo(op_id: str = "last", factory: MailboxFactory = default_factory) -> dict:
+    with store.locked("changes"):
+        return _undo(op_id, factory)
+
+
+def _undo(op_id: str, factory: MailboxFactory) -> dict:
     ops = _ops()
     if op_id == "last":
         live = [o for o in ops.values() if _remaining(o)]

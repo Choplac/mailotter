@@ -244,3 +244,35 @@ def test_scope_is_modify_only():
     from mailotter.auth import SCOPES
 
     assert SCOPES == ["https://www.googleapis.com/auth/gmail.modify"]
+
+
+def test_torn_journal_line_does_not_break_undo(world):
+    fakes, factory = world
+    p = actions.preview("trash", "personal", "from:mom@family.com", factory)
+    r = actions.confirm(p["code"], factory)
+    with open(actions._log_path(), "a") as f:
+        f.write('{"progress": "op-cut')  # crash mid-append
+    assert actions.undo(r["id"], factory)["restored"] == 3
+
+
+def test_confirm_refuses_when_recheck_is_incomplete(world, monkeypatch):
+    fakes, factory = world
+    monkeypatch.setenv("MAILOTTER_MAX_BATCH", "5")
+    p = actions.preview("trash", "personal", "from:mom@family.com", factory)
+    for i in range(40):  # flood of new matching mail after the preview
+        fakes["personal"].store[f"x{i}"] = {"id": f"x{i}", "from": "mom@family.com", "subject": "dinner", "labels": {"INBOX"}}
+    with pytest.raises(RuntimeError, match="Nothing was changed"):
+        actions.confirm(p["code"], factory)
+    assert not in_trash(fakes["personal"])
+
+
+def test_pacing_is_shared_per_account(monkeypatch):
+    from mailotter import mailbox as mb
+
+    slept = []
+    monkeypatch.setattr(mb.time, "sleep", slept.append)
+    monkeypatch.setattr(mb, "_NEXT_FREE", {})
+    a = Mailbox("acct", None)
+    a._spend(900)                      # 10 s of budget
+    Mailbox("acct", None)._spend(90)   # a new instance must still wait
+    assert slept and slept[0] > 9

@@ -18,7 +18,8 @@ BODY_LIMIT = 20_000
 COST = {"list": 5, "get": 20, "get_full": 60, "trash": 20, "untrash": 5, "batchModify": 50}
 # Google allows 6,000 units per user per minute; stay safely below it.
 UNITS_PER_SECOND = 90.0
-RETRY_WAITS = (20.0, 60.0)  # seconds before retrying failed requests (quota recovers per minute)
+RETRY_WAITS = (20.0, 60.0)
+_NEXT_FREE: dict[str, float] = {}  # per account: earliest start of the next request (this process)  # seconds before retrying failed requests (quota recovers per minute)
 
 
 def _chunks(items, size):
@@ -81,7 +82,6 @@ class Mailbox:
         self.alias = alias
         self.svc = service
         self.throttle = throttle
-        self._next = 0.0  # earliest time the next request may start
 
     @property
     def _msgs(self):
@@ -92,10 +92,11 @@ class Mailbox:
         if not self.throttle:
             return
         now = time.monotonic()
-        if self._next > now:
-            time.sleep(self._next - now)
-            now = self._next
-        self._next = now + units / UNITS_PER_SECOND
+        nxt = _NEXT_FREE.get(self.alias, 0.0)
+        if nxt > now:
+            time.sleep(nxt - now)
+            now = nxt
+        _NEXT_FREE[self.alias] = now + units / UNITS_PER_SECOND
 
     def _wait(self, seconds: float) -> None:
         if self.throttle:
