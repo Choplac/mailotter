@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mailotter"
+version = "0.1.0"
+description = "A little help for a lot of mail: let your AI assistant search and clean many Gmail accounts, safely (no sending, no permanent deletes, undo for everything)."
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.10"
+authors = [{ name = "Chengxuan Huang" }]
+keywords = ["gmail", "mcp", "claude", "email", "inbox", "cleanup"]
+dependencies = [
+  "mcp>=2,<3",
+  "google-api-python-client>=2.100",
+  "google-auth-oauthlib>=1.2",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=8"]
+
+[project.scripts]
+mailotter = "mailotter.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["tests"]
