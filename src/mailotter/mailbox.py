@@ -16,8 +16,9 @@ BODY_LIMIT = 20_000
 
 # Gmail quota units per call (developers.google.com/workspace/gmail/api/reference/quota)
 COST = {"list": 5, "get": 20, "get_full": 60, "trash": 20, "untrash": 5, "batchModify": 50}
-# Google allows 6,000 units per user per minute; stay safely below it.
-UNITS_PER_SECOND = 90.0
+# Google allows 6,000 units per user per minute, but pushes back well before that in
+# practice (a 1,500-email trash at 90 units/s saw ~18% "slow down" errors). Stay at half.
+UNITS_PER_SECOND = 50.0
 RETRY_WAITS = (20.0, 60.0)
 _NEXT_FREE: dict[str, float] = {}  # per account: earliest start of the next request (this process)  # seconds before retrying failed requests (quota recovers per minute)
 

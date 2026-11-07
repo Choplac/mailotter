@@ -23,7 +23,7 @@ And what it **can't** do, by design:
 
 It runs on your own computer (Linux, macOS or WSL). Your mail goes only between your computer and Google.
 
-It deliberately stays under Gmail's per-account speed limit, so big jobs take time: about 5 minutes to trash 1,000 emails, and about 1 minute to scan 250 for top senders.
+It deliberately stays under Gmail's per-account speed limit, so big jobs take time: about 7 minutes to trash 1,000 emails, and about 2 minutes to scan 250 for top senders.
 
 ## Install
 
