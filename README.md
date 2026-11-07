@@ -114,4 +114,4 @@ python -m venv .venv && .venv/bin/pip install -e '.[test]'
 
 ## License
 
-MIT
+MIT. See also the [privacy policy](PRIVACY.md).
