@@ -13,9 +13,10 @@ from html import unescape
 BATCH = 50              # Gmail recommends at most 50 calls per batch
 MODIFY_CHUNK = 1000     # batchModify limit
 BODY_LIMIT = 20_000
+ATTACHMENT_LIMIT = 25 * 1024 * 1024
 
 # Gmail quota units per call (developers.google.com/workspace/gmail/api/reference/quota)
-COST = {"list": 5, "get": 20, "get_full": 60, "trash": 20, "untrash": 5, "batchModify": 50}
+COST = {"list": 5, "get": 20, "get_full": 60, "attachment": 5, "trash": 20, "untrash": 5, "batchModify": 50}
 # Google allows 6,000 units per user per minute, but pushes back well before that in
 # practice (a 1,500-email trash at 90 units/s saw ~18% "slow down" errors). Stay at half.
 UNITS_PER_SECOND = 50.0
@@ -48,15 +49,25 @@ def _summary(alias: str, msg: dict) -> dict:
     }
 
 
+def _bytes(data: str) -> bytes:
+    return base64.urlsafe_b64decode(data + "=" * (-len(data) % 4))
+
+
 def _decode(data: str) -> str:
-    return base64.urlsafe_b64decode(data + "=" * (-len(data) % 4)).decode("utf-8", "replace")
+    return _bytes(data).decode("utf-8", "replace")
+
+
+def _parts(part: dict):
+    """Every MIME part of a message payload, depth first."""
+    yield part
+    for p in part.get("parts") or []:
+        yield from _parts(p)
 
 
 def _body(payload: dict) -> tuple[str, list[str]]:
     """Plain-text body (falls back to stripped HTML) and attachment names."""
     plain, html, files = [], [], []
-
-    def walk(part):
+    for part in _parts(payload or {}):
         mime = part.get("mimeType", "")
         body = part.get("body") or {}
         if part.get("filename"):
@@ -65,10 +76,6 @@ def _body(payload: dict) -> tuple[str, list[str]]:
             plain.append(_decode(body["data"]))
         elif body.get("data") and mime == "text/html":
             html.append(_decode(body["data"]))
-        for p in part.get("parts") or []:
-            walk(p)
-
-    walk(payload or {})
     if plain:
         text = "\n".join(plain)
     else:
@@ -174,6 +181,49 @@ class Mailbox:
             attachments=files,
         )
         return out
+
+    def attachments(self, ids: list[str]) -> tuple[list[dict], int]:
+        """Attachment bytes of each message, in order:
+        {"id", "internal_date" (ms), "files": [{"filename", "size", "data": bytes | None, "error"}]}.
+        Parts over ATTACHMENT_LIMIT are not downloaded (data None, error "too large").
+        Second value: how many messages could not be read."""
+        found, failed = self._batched(
+            ids, lambda mid: self._msgs.get(userId="me", id=mid, format="full"), COST["get_full"]
+        )
+        out = []
+        for mid in [m for m in ids if m in found]:
+            msg = found[mid]
+            files, fetch = [], {}
+            for part in _parts(msg.get("payload") or {}):
+                if not part.get("filename"):
+                    continue
+                body = part.get("body") or {}
+                f = {"filename": part["filename"], "size": int(body.get("size") or 0), "data": None, "error": None}
+                files.append(f)
+                if f["size"] > ATTACHMENT_LIMIT:
+                    f["error"] = "too large"
+                elif body.get("data") is not None:
+                    f["data"] = _bytes(body["data"])
+                elif body.get("attachmentId"):
+                    fetch[str(len(files) - 1)] = body["attachmentId"]
+                else:
+                    f["error"] = "no data"
+            got, bad = self._batched(
+                list(fetch),
+                lambda key: self._msgs.attachments().get(userId="me", messageId=mid, id=fetch[key]),
+                COST["attachment"],
+            )
+            for key, resp in got.items():
+                files[int(key)]["data"] = _bytes(resp.get("data") or "")
+            for key in bad:
+                files[int(key)]["error"] = "could not be loaded"
+            for f in files:
+                if f["data"] is not None:
+                    f["size"] = len(f["data"])
+                    if f["size"] > ATTACHMENT_LIMIT:
+                        f["data"], f["error"] = None, "too large"
+            out.append({"id": mid, "internal_date": int(msg.get("internalDate") or 0), "files": files})
+        return out, len(failed)
 
     def top_senders(self, query: str, sample: int) -> tuple[Counter, int, bool, int]:
         ids, more = self.ids(query, sample)

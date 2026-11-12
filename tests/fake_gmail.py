@@ -3,6 +3,10 @@
 Query support is deliberately simple: 'from:X' matches the sender, other words
 match the subject, 'in:inbox' requires the INBOX label. Trashed mail is hidden
 from searches, like Gmail.
+
+A message may carry "attachments": [{"filename", "data": bytes, "inline": bool}]
+and "internalDate" (milliseconds since 1970, as Gmail sends it). Every API call
+is recorded by name in `api`.
 """
 
 from __future__ import annotations
@@ -25,6 +29,7 @@ class FakeGmail:
         self.fail_ids = set(fail_ids)      # always fail on trash/untrash
         self.fail_once = set(fail_once)    # fail first time only
         self.calls = []
+        self.api = []                      # every API call, by name
 
     # ---- query --------------------------------------------------------------
     def _match(self, msg, q):
@@ -52,22 +57,33 @@ class FakeGmail:
 
     def _get(self, mid, fmt):
         m = self.store[mid]
-        body = base64.urlsafe_b64encode(m.get("body", "hello").encode()).decode().rstrip("=")
-        return {
-            "id": mid,
-            "snippet": m["subject"],
-            "labelIds": sorted(m["labels"]),
-            "payload": {
-                "mimeType": "text/plain",
-                "headers": [
-                    {"name": "From", "value": m["from"]},
-                    {"name": "Subject", "value": m["subject"]},
-                    {"name": "Date", "value": "Sat, 7 Nov 2026 10:00:00 -0800"},
-                    {"name": "To", "value": "me@example.com"},
-                ],
-                "body": {"data": body} if fmt == "full" else {},
-            },
+        body = _b64(m.get("body", "hello").encode())
+        payload = {
+            "mimeType": "text/plain",
+            "headers": [
+                {"name": "From", "value": m["from"]},
+                {"name": "Subject", "value": m["subject"]},
+                {"name": "Date", "value": "Sat, 7 Nov 2026 10:00:00 -0800"},
+                {"name": "To", "value": "me@example.com"},
+            ],
+            "body": {"data": body} if fmt == "full" else {},
         }
+        if fmt == "full" and m.get("attachments"):
+            text = {"mimeType": "text/plain", "body": payload.pop("body")}
+            payload.update(mimeType="multipart/mixed", body={}, parts=[text])
+            for i, a in enumerate(m["attachments"]):
+                size = a.get("size", len(a["data"]))
+                part_body = {"size": size, "data": _b64(a["data"])} if a.get("inline") else {"size": size, "attachmentId": f"att{i}"}
+                payload["parts"].append({"mimeType": a.get("mime", "application/octet-stream"),
+                                         "filename": a["filename"], "body": part_body})
+        out = {"id": mid, "snippet": m["subject"], "labelIds": sorted(m["labels"]), "payload": payload}
+        if "internalDate" in m:
+            out["internalDate"] = m["internalDate"]
+        return out
+
+    def _attachment(self, mid, aid):
+        data = self.store[mid]["attachments"][int(aid[3:])]["data"]
+        return {"size": len(data), "data": _b64(data)}
 
     def _label(self, mid, add=(), remove=(), op=""):
         self.calls.append((op, mid))
@@ -88,20 +104,31 @@ class FakeGmail:
     def messages(self):
         return self
 
+    def _req(self, name, fn):
+        def run():
+            self.api.append(name)
+            return fn()
+
+        return _Req(run)
+
     def list(self, userId, q, maxResults, pageToken=None):
-        return _Req(lambda: self._list(q, maxResults, pageToken))
+        return self._req("list", lambda: self._list(q, maxResults, pageToken))
 
     def get(self, userId, id, format="full", metadataHeaders=None):
-        return _Req(lambda: self._get(id, format))
+        return self._req("get", lambda: self._get(id, format))
+
+    def attachments(self):
+        return _Attachments(self)
 
     def trash(self, userId, id):
-        return _Req(lambda: self._label(id, add={"TRASH"}, remove={"INBOX"}, op="trash"))
+        return self._req("trash", lambda: self._label(id, add={"TRASH"}, remove={"INBOX"}, op="trash"))
 
     def untrash(self, userId, id):
-        return _Req(lambda: self._label(id, remove={"TRASH"}, add={"INBOX"}, op="untrash"))
+        return self._req("untrash", lambda: self._label(id, remove={"TRASH"}, add={"INBOX"}, op="untrash"))
 
     def batchModify(self, userId, body):
         def run():
+            self.api.append("batchModify")
             self.calls.append(("batchModify", tuple(body["ids"])))
             for mid in body["ids"]:
                 m = self.store[mid]
@@ -113,6 +140,18 @@ class FakeGmail:
 
     def new_batch_http_request(self):
         return _Batch()
+
+
+def _b64(data: bytes) -> str:
+    return base64.urlsafe_b64encode(data).decode().rstrip("=")
+
+
+class _Attachments:
+    def __init__(self, gmail):
+        self.gmail = gmail
+
+    def get(self, userId, messageId, id):
+        return self.gmail._req("attachments.get", lambda: self.gmail._attachment(messageId, id))
 
 
 class _Batch:

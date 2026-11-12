@@ -8,7 +8,7 @@ import shutil
 import sys
 from pathlib import Path
 
-from . import actions, store
+from . import actions, save, store
 from .core import read_one, search_all, senders_report
 
 
@@ -64,6 +64,25 @@ def cmd_read(a):
     if m["attachments"]:
         print("Attachments: " + ", ".join(m["attachments"]))
     print("\n" + m["body"])
+
+
+def cmd_save_attachments(a):
+    res = save.save_attachments(a.account, a.query, a.to, a.pdf_only, a.limit)
+    labels = {"skipped": "skipped, not a PDF:", "too large": "refused, over 25 MB:",
+              "refused": "refused, not a regular file:", "failed": "failed to load:"}
+    counts = dict.fromkeys(("saved", "already saved", "conflict", "skipped", "too large", "refused", "failed"), 0)
+    for r in res["results"]:
+        counts[r["status"]] += 1
+        print(f"{labels.get(r['status'], r['status'])} {r['name']} ({r['size']:,} bytes)")
+    if res["more"]:
+        print(f"Only the newest {a.limit} matching emails were checked (raise --limit for more).")
+    if res["unreadable"]:
+        print(f"{res['unreadable']} matching emails could not be loaded (Gmail busy). Try again shortly.")
+    bad = counts["conflict"] + counts["too large"] + counts["refused"] + counts["failed"] + res["unreadable"]
+    print(f"Saved {counts['saved']}, already saved {counts['already saved']}, conflicts {counts['conflict']}, "
+          f"skipped (not PDF) {counts['skipped']}, problems {bad - counts['conflict']}.")
+    if bad:
+        sys.exit(1)
 
 
 def cmd_top(a):
@@ -153,6 +172,14 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("account")
     s.add_argument("message_id")
     s.set_defaults(fn=cmd_read)
+
+    s = sub.add_parser("save-attachments", help="save attachments of matching mail to a folder (changes no mail)")
+    s.add_argument("query")
+    s.add_argument("-a", "--account", required=True)
+    s.add_argument("--to", required=True, help="folder to save into (created if missing)")
+    s.add_argument("--pdf-only", action="store_true", help="keep only real PDF files")
+    s.add_argument("-n", "--limit", type=int, default=20, help="newest matching emails to check")
+    s.set_defaults(fn=cmd_save_attachments)
 
     s = sub.add_parser("top-senders", help="who fills your inbox")
     s.add_argument("-a", "--account", default="all")
