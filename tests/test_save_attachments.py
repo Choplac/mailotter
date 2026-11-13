@@ -314,3 +314,30 @@ def test_saves_message_by_message_and_reports_a_failed_one(box, tmp_path, monkey
     assert seen["m3"] == ["2026-11-08-m1.pdf"]       # m1 was on disk before m3 was fetched
     assert files(out) == ["2026-11-08-m1.pdf", "2026-11-08-m3.pdf"]
     assert "failed to load: 2026-11-08-m2.pdf" in capsys.readouterr().out
+
+
+# ---- review round 2 ------------------------------------------------------------
+
+def test_nameless_multipart_attachment_is_reported_not_skipped(box, tmp_path, capsys):
+    fake, run = box
+    text = {"mimeType": "text/plain", "filename": "", "body": {"size": 2, "data": "aGk"}}
+    container = {"mimeType": "multipart/mixed", "filename": "", "body": {"size": 0},
+                 "headers": [{"name": "Content-Disposition", "value": "attachment"}], "parts": [text, dict(text)]}
+    fake.store["m1"] = {**mail("m1", [{"part": container}, {"filename": "a.pdf", "data": PDF}]), "labels": {"INBOX"}}
+    assert run() != 0
+    assert files(tmp_path / "out") == ["2026-11-08-m1-2.pdf"]     # the body texts are not saved as files
+    assert "failed to load: 2026-11-08-m1" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("first", [(), ("--pdf-only",)])
+def test_pdf_only_flag_does_not_change_names(box, tmp_path, capsys, first):
+    fake, run = box
+    fake.store["m1"] = {**mail("m1", [{"filename": "x.pdf", "data": b"<html>not a pdf</html>"},
+                                      {"filename": "scan.bin", "data": PDF}]), "labels": {"INBOX"}}
+    second = () if first else ("--pdf-only",)
+    assert run(*first) == 0
+    capsys.readouterr()
+    assert run(*second) == 0
+    assert "already saved 2026-11-08-m1-2.pdf" in capsys.readouterr().out
+    assert (tmp_path / "out" / "2026-11-08-m1-2.pdf").read_bytes() == PDF
+    assert [n for n in files(tmp_path / "out") if n.startswith("2026-11-08-m1-2")] == ["2026-11-08-m1-2.pdf"]

@@ -6,7 +6,8 @@ from searches, like Gmail.
 
 A message may carry "attachments": [{"filename", "data": bytes, "inline": bool}]
 (optional per attachment: "mime", "size", "disposition" (Content-Disposition header),
-"empty_data" (body carries attachmentId and data ""), "fail" (attachments.get always fails))
+"empty_data" (body carries attachmentId and data ""), "fail" (attachments.get always fails),
+"part" (a raw Gmail part dict, sent as is instead of one built from the other keys))
 and "internalDate" (milliseconds since 1970, as Gmail sends it). Every API call
 is recorded by name in `api`.
 """
@@ -74,6 +75,9 @@ class FakeGmail:
             text = {"mimeType": "text/plain", "body": payload.pop("body")}
             payload.update(mimeType="multipart/mixed", body={}, parts=[text])
             for i, a in enumerate(m["attachments"]):
+                if "part" in a:
+                    payload["parts"].append(a["part"])
+                    continue
                 size = a.get("size", len(a["data"]))
                 part_body = {"size": size, "data": _b64(a["data"])} if a.get("inline") else {"size": size, "attachmentId": f"att{i}"}
                 if a.get("empty_data"):

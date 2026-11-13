@@ -69,13 +69,13 @@ def _is_attachment(part: dict) -> bool:
     content that is not a text body. Gmail may omit the filename of a real attachment."""
     if part.get("filename"):
         return True
-    mime = (part.get("mimeType") or "").lower()
-    if mime.startswith("multipart/"):
-        return False
     for h in part.get("headers") or []:
         if h.get("name", "").lower() == "content-disposition":
             if h.get("value", "").strip().lower().startswith("attachment"):
-                return True
+                return True  # even a container: it then has no data and is reported as failed
+    mime = (part.get("mimeType") or "").lower()
+    if mime.startswith("multipart/"):
+        return False
     return bool((part.get("body") or {}).get("attachmentId")) and mime not in ("text/plain", "text/html")
 
 

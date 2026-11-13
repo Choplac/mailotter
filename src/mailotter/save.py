@@ -3,8 +3,9 @@
 The attachment's own filename is written by a stranger, so it never shapes the
 path: files are named <YYYY-MM-DD>-<message id>[-<n>].<ext>, where <n> is the
 attachment's position in the email (stable across reruns, whatever failed) and
-only a short lowercase extension is taken from the original name (or the MIME
-type when there is no name). Existing files are never overwritten, and a symlink
+<ext> is .pdf for content that really is a PDF, otherwise a short lowercase
+extension from the original name (or the MIME type when there is no name); the
+same in both --pdf-only modes. Existing files are never overwritten, and a symlink
 or non-file at the target name is refused. A file appears under its final name
 only complete: it is written to a hidden ".mailotter-*.part" temp file, synced,
 then hard-linked into place, which fails rather than replace anything there.
@@ -103,11 +104,14 @@ def save_attachments(
             continue
         day = datetime.fromtimestamp(msg["internal_date"] / 1000, tz=timezone.utc).strftime("%Y-%m-%d")
         for n, f in enumerate(msg["files"], start=1):  # n = position in the email, not among successes
-            ext = ".pdf" if pdf_only else _ext(f["filename"], f["mime"])
+            # The name never depends on --pdf-only: a real PDF is always .pdf, so runs with
+            # and without the flag find each other's files.
+            is_pdf = f["data"] is not None and f["data"].startswith(b"%PDF-")
+            ext = ".pdf" if is_pdf else _ext(f["filename"], f["mime"])
             name = f"{day}-{msg['id']}{'' if n == 1 else f'-{n}'}{ext}"
             if f["error"]:
                 status = "too large" if f["error"] == "too large" else "failed"
-            elif pdf_only and not f["data"].startswith(b"%PDF-"):
+            elif pdf_only and not is_pdf:
                 status = "skipped"
             else:
                 try:
