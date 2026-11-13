@@ -341,3 +341,28 @@ def test_pdf_only_flag_does_not_change_names(box, tmp_path, capsys, first):
     assert "already saved 2026-11-08-m1-2.pdf" in capsys.readouterr().out
     assert (tmp_path / "out" / "2026-11-08-m1-2.pdf").read_bytes() == PDF
     assert [n for n in files(tmp_path / "out") if n.startswith("2026-11-08-m1-2")] == ["2026-11-08-m1-2.pdf"]
+
+
+# ---- review round 3 ------------------------------------------------------------
+
+@pytest.mark.parametrize("body", [{"size": 0, "data": ""}, {"size": 10, "attachmentId": "att0"}])
+def test_attachment_container_with_empty_data_or_id_fails(box, tmp_path, capsys, body):
+    fake, run = box
+    text = {"mimeType": "text/plain", "filename": "", "body": {"size": 2, "data": "aGk"}}
+    container = {"mimeType": "multipart/mixed", "filename": "", "body": body,
+                 "headers": [{"name": "Content-Disposition", "value": "attachment"}], "parts": [text]}
+    fake.store["m1"] = {**mail("m1", [{"part": container}]), "labels": {"INBOX"}}
+    assert run() != 0
+    assert files(tmp_path / "out") == []
+    assert "failed to load: 2026-11-08-m1" in capsys.readouterr().out
+    assert "attachments.get" not in fake.api                     # a container's id is never fetched
+
+
+def test_zero_byte_attachment_is_saved(box, tmp_path):
+    fake, run = box
+    fake.store["m1"] = {**mail("m1", [{"filename": "empty.txt", "data": b"", "inline": True},
+                                      {"filename": "empty2.txt", "data": b""}]), "labels": {"INBOX"}}
+    assert run() == 0
+    out = tmp_path / "out"
+    assert files(out) == ["2026-11-08-m1-2.txt", "2026-11-08-m1.txt"]
+    assert (out / "2026-11-08-m1.txt").read_bytes() == b"" == (out / "2026-11-08-m1-2.txt").read_bytes()

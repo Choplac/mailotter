@@ -72,7 +72,7 @@ def _is_attachment(part: dict) -> bool:
     for h in part.get("headers") or []:
         if h.get("name", "").lower() == "content-disposition":
             if h.get("value", "").strip().lower().startswith("attachment"):
-                return True  # even a container: it then has no data and is reported as failed
+                return True  # even a container: _files then reports it as failed
     mime = (part.get("mimeType") or "").lower()
     if mime.startswith("multipart/"):
         return False
@@ -221,7 +221,9 @@ class Mailbox:
             f = {"filename": part.get("filename") or "", "mime": (part.get("mimeType") or "").lower(),
                  "size": int(body.get("size") or 0), "data": None, "error": None}
             files.append(f)
-            if f["size"] > ATTACHMENT_LIMIT:
+            if f["mime"].startswith("multipart/"):
+                f["error"] = "no data"  # a container marked as an attachment has no content of its own
+            elif f["size"] > ATTACHMENT_LIMIT:
                 f["error"] = "too large"
             elif body.get("attachmentId"):  # the content lives there, even if `data` is also present (empty)
                 fetch[str(len(files) - 1)] = body["attachmentId"]
