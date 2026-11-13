@@ -79,8 +79,9 @@ mailotter save-attachments "from:reports@example.com has:attachment" -a work --t
 Saves the attachments of the newest matching emails (20 by default, `-n` for more) in one account.
 It only reads mail: nothing is labelled, archived, trashed or marked read.
 
-- Files are named `<date>-<message id>.<ext>` (`-2`, `-3` when one email has several), never after
-  the attachment's own name, which a stranger chose. `--pdf-only` keeps only files that really are PDFs.
+- Files are named `<date>-<message id>.<ext>` (`-2`, `-3` for the second and third attachment of
+  an email, so a rerun after a failed download gives the same names), never after the attachment's
+  own name, which a stranger chose; attachments that have no name are saved too. `--pdf-only` keeps only files that really are PDFs.
 - A new folder is created private to you, and files are readable only by you.
 - It never overwrites. A file already saved with the same content is skipped; a different file with
   the same name is reported as a conflict and left alone. Attachments over 25 MB are refused.

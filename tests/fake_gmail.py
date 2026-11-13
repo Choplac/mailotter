@@ -5,6 +5,8 @@ match the subject, 'in:inbox' requires the INBOX label. Trashed mail is hidden
 from searches, like Gmail.
 
 A message may carry "attachments": [{"filename", "data": bytes, "inline": bool}]
+(optional per attachment: "mime", "size", "disposition" (Content-Disposition header),
+"empty_data" (body carries attachmentId and data ""), "fail" (attachments.get always fails))
 and "internalDate" (milliseconds since 1970, as Gmail sends it). Every API call
 is recorded by name in `api`.
 """
@@ -74,15 +76,22 @@ class FakeGmail:
             for i, a in enumerate(m["attachments"]):
                 size = a.get("size", len(a["data"]))
                 part_body = {"size": size, "data": _b64(a["data"])} if a.get("inline") else {"size": size, "attachmentId": f"att{i}"}
-                payload["parts"].append({"mimeType": a.get("mime", "application/octet-stream"),
-                                         "filename": a["filename"], "body": part_body})
+                if a.get("empty_data"):
+                    part_body["data"] = ""
+                part = {"mimeType": a.get("mime", "application/octet-stream"), "filename": a["filename"], "body": part_body}
+                if a.get("disposition"):
+                    part["headers"] = [{"name": "Content-Disposition", "value": a["disposition"]}]
+                payload["parts"].append(part)
         out = {"id": mid, "snippet": m["subject"], "labelIds": sorted(m["labels"]), "payload": payload}
         if "internalDate" in m:
             out["internalDate"] = m["internalDate"]
         return out
 
     def _attachment(self, mid, aid):
-        data = self.store[mid]["attachments"][int(aid[3:])]["data"]
+        a = self.store[mid]["attachments"][int(aid[3:])]
+        if a.get("fail"):
+            raise RuntimeError("backend error")
+        data = a["data"]
         return {"size": len(data), "data": _b64(data)}
 
     def _label(self, mid, add=(), remove=(), op=""):

@@ -64,6 +64,21 @@ def _parts(part: dict):
         yield from _parts(p)
 
 
+def _is_attachment(part: dict) -> bool:
+    """A part with a filename, an attachment disposition, or separately stored
+    content that is not a text body. Gmail may omit the filename of a real attachment."""
+    if part.get("filename"):
+        return True
+    mime = (part.get("mimeType") or "").lower()
+    if mime.startswith("multipart/"):
+        return False
+    for h in part.get("headers") or []:
+        if h.get("name", "").lower() == "content-disposition":
+            if h.get("value", "").strip().lower().startswith("attachment"):
+                return True
+    return bool((part.get("body") or {}).get("attachmentId")) and mime not in ("text/plain", "text/html")
+
+
 def _body(payload: dict) -> tuple[str, list[str]]:
     """Plain-text body (falls back to stripped HTML) and attachment names."""
     plain, html, files = [], [], []
@@ -182,48 +197,53 @@ class Mailbox:
         )
         return out
 
-    def attachments(self, ids: list[str]) -> tuple[list[dict], int]:
-        """Attachment bytes of each message, in order:
-        {"id", "internal_date" (ms), "files": [{"filename", "size", "data": bytes | None, "error"}]}.
-        Parts over ATTACHMENT_LIMIT are not downloaded (data None, error "too large").
-        Second value: how many messages could not be read."""
-        found, failed = self._batched(
-            ids, lambda mid: self._msgs.get(userId="me", id=mid, format="full"), COST["get_full"]
-        )
-        out = []
-        for mid in [m for m in ids if m in found]:
-            msg = found[mid]
-            files, fetch = [], {}
-            for part in _parts(msg.get("payload") or {}):
-                if not part.get("filename"):
-                    continue
-                body = part.get("body") or {}
-                f = {"filename": part["filename"], "size": int(body.get("size") or 0), "data": None, "error": None}
-                files.append(f)
-                if f["size"] > ATTACHMENT_LIMIT:
-                    f["error"] = "too large"
-                elif body.get("data") is not None:
-                    f["data"] = _bytes(body["data"])
-                elif body.get("attachmentId"):
-                    fetch[str(len(files) - 1)] = body["attachmentId"]
-                else:
-                    f["error"] = "no data"
-            got, bad = self._batched(
-                list(fetch),
-                lambda key: self._msgs.attachments().get(userId="me", messageId=mid, id=fetch[key]),
-                COST["attachment"],
+    def attachments(self, ids: list[str]):
+        """Attachment bytes, one message at a time (fetched in batches of BATCH, so
+        memory stays bounded). Yields, in order, either {"id", "unreadable": True} or
+        {"id", "internal_date" (ms), "files": [{"filename", "mime", "size", "data": bytes | None, "error"}]}.
+        `files` lists every attachment part in MIME order, so a part keeps its position
+        whether or not its download worked. Parts over ATTACHMENT_LIMIT are not
+        downloaded (data None, error "too large")."""
+        for chunk in _chunks(ids, BATCH):
+            found, _ = self._batched(
+                chunk, lambda mid: self._msgs.get(userId="me", id=mid, format="full"), COST["get_full"]
             )
-            for key, resp in got.items():
-                files[int(key)]["data"] = _bytes(resp.get("data") or "")
-            for key in bad:
-                files[int(key)]["error"] = "could not be loaded"
-            for f in files:
-                if f["data"] is not None:
-                    f["size"] = len(f["data"])
-                    if f["size"] > ATTACHMENT_LIMIT:
-                        f["data"], f["error"] = None, "too large"
-            out.append({"id": mid, "internal_date": int(msg.get("internalDate") or 0), "files": files})
-        return out, len(failed)
+            for mid in chunk:
+                msg = found.pop(mid, None)
+                yield {"id": mid, "unreadable": True} if msg is None else self._files(mid, msg)
+
+    def _files(self, mid: str, msg: dict) -> dict:
+        files, fetch = [], {}
+        for part in _parts(msg.get("payload") or {}):
+            if not _is_attachment(part):
+                continue
+            body = part.get("body") or {}
+            f = {"filename": part.get("filename") or "", "mime": (part.get("mimeType") or "").lower(),
+                 "size": int(body.get("size") or 0), "data": None, "error": None}
+            files.append(f)
+            if f["size"] > ATTACHMENT_LIMIT:
+                f["error"] = "too large"
+            elif body.get("attachmentId"):  # the content lives there, even if `data` is also present (empty)
+                fetch[str(len(files) - 1)] = body["attachmentId"]
+            elif body.get("data") is not None:
+                f["data"] = _bytes(body["data"])
+            else:
+                f["error"] = "no data"
+        got, bad = self._batched(
+            list(fetch),
+            lambda key: self._msgs.attachments().get(userId="me", messageId=mid, id=fetch[key]),
+            COST["attachment"],
+        )
+        for key, resp in got.items():
+            files[int(key)]["data"] = _bytes(resp.get("data") or "")
+        for key in bad:
+            files[int(key)]["error"] = "could not be loaded"
+        for f in files:
+            if f["data"] is not None:
+                f["size"] = len(f["data"])
+                if f["size"] > ATTACHMENT_LIMIT:
+                    f["data"], f["error"] = None, "too large"
+        return {"id": mid, "internal_date": int(msg.get("internalDate") or 0), "files": files}
 
     def top_senders(self, query: str, sample: int) -> tuple[Counter, int, bool, int]:
         ids, more = self.ids(query, sample)

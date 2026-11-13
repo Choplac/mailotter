@@ -71,8 +71,8 @@ def test_pdf_only_checks_the_bytes_not_the_name(box, tmp_path, capsys):
     fake.store["m1"] = {**mail("m1", [{"filename": "x.pdf", "data": b"<html>not a pdf</html>", "mime": "application/pdf"},
                                       {"filename": "scan.bin", "data": PDF}]), "labels": {"INBOX"}}
     assert run("--pdf-only") == 0
-    assert files(tmp_path / "out") == ["2026-11-08-m1.pdf"]   # one kept, so no suffix
-    assert (tmp_path / "out" / "2026-11-08-m1.pdf").read_bytes() == PDF
+    assert files(tmp_path / "out") == ["2026-11-08-m1-2.pdf"]   # numbered by its place in the email
+    assert (tmp_path / "out" / "2026-11-08-m1-2.pdf").read_bytes() == PDF
     assert "skipped, not a PDF" in capsys.readouterr().out
 
 
@@ -160,8 +160,8 @@ def test_oversized_attachment_is_refused_without_download(box, tmp_path, capsys)
     fake.store["m1"] = {**mail("m1", [{"filename": "big.pdf", "data": PDF, "size": 25 * 1024 * 1024 + 1},
                                       {"filename": "small.pdf", "data": PDF2}]), "labels": {"INBOX"}}
     assert run() != 0
-    assert files(tmp_path / "out") == ["2026-11-08-m1.pdf"]
-    assert (tmp_path / "out" / "2026-11-08-m1.pdf").read_bytes() == PDF2
+    assert files(tmp_path / "out") == ["2026-11-08-m1-2.pdf"]
+    assert (tmp_path / "out" / "2026-11-08-m1-2.pdf").read_bytes() == PDF2
     assert fake.api.count("attachments.get") == 1
     assert "over 25 MB" in capsys.readouterr().out
 
@@ -193,3 +193,124 @@ def test_names_one_account(box, tmp_path):
     store.save_account("home", "home@example.com")
     with pytest.raises(ValueError, match="one account"):
         save.save_attachments("all", "has:attachment", tmp_path / "out")
+
+
+# ---- review findings ---------------------------------------------------------
+
+def _race(monkeypatch, path, content):
+    """Make another process create `path` while our temp file is being written."""
+    real = os.fsync
+
+    def fsync(fd):
+        if not path.exists():
+            path.write_bytes(content)
+        return real(fd)
+
+    monkeypatch.setattr(save.os, "fsync", fsync)
+
+
+def test_file_created_meanwhile_by_another_process_is_not_overwritten(box, tmp_path, monkeypatch, capsys):
+    fake, run = box
+    fake.store["m1"] = {**mail("m1", [{"filename": "a.pdf", "data": PDF}]), "labels": {"INBOX"}}
+    target = tmp_path / "out" / "2026-11-08-m1.pdf"
+    _race(monkeypatch, target, b"theirs, keep me")
+    assert run() != 0
+    assert target.read_bytes() == b"theirs, keep me"
+    assert "conflict 2026-11-08-m1.pdf" in capsys.readouterr().out
+    assert files(tmp_path / "out") == ["2026-11-08-m1.pdf"]   # temp file cleaned up
+
+
+def test_same_file_created_meanwhile_counts_as_already_saved(box, tmp_path, monkeypatch, capsys):
+    fake, run = box
+    fake.store["m1"] = {**mail("m1", [{"filename": "a.pdf", "data": PDF}]), "labels": {"INBOX"}}
+    _race(monkeypatch, tmp_path / "out" / "2026-11-08-m1.pdf", PDF)
+    assert run() == 0
+    assert "already saved 2026-11-08-m1.pdf" in capsys.readouterr().out
+    assert files(tmp_path / "out") == ["2026-11-08-m1.pdf"]
+
+
+def test_write_failure_leaves_no_file_and_is_reported(box, tmp_path, monkeypatch, capsys):
+    fake, run = box
+    fake.store["m1"] = {**mail("m1", [{"filename": "a.pdf", "data": PDF}, {"filename": "b.pdf", "data": PDF2}]),
+                        "labels": {"INBOX"}}
+
+    def fsync(fd):
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(save.os, "fsync", fsync)
+    assert run() != 0
+    assert files(tmp_path / "out") == []
+    assert capsys.readouterr().out.count("could not write:") == 2
+
+
+def test_leftover_temp_file_is_never_taken_as_saved(box, tmp_path):
+    fake, run = box
+    fake.store["m1"] = {**mail("m1", [{"filename": "a.pdf", "data": PDF}]), "labels": {"INBOX"}}
+    out = tmp_path / "out"
+    out.mkdir()
+    (out / ".mailotter-abc123.part").write_bytes(PDF[:5])   # an interrupted earlier run
+    assert run() == 0
+    assert (out / "2026-11-08-m1.pdf").read_bytes() == PDF
+
+
+def test_attachment_id_is_fetched_even_when_data_is_empty(box, tmp_path):
+    fake, run = box
+    fake.store["m1"] = {**mail("m1", [{"filename": "a.pdf", "data": PDF, "empty_data": True}]), "labels": {"INBOX"}}
+    assert run("--pdf-only") == 0
+    assert (tmp_path / "out" / "2026-11-08-m1.pdf").read_bytes() == PDF
+    assert fake.api.count("attachments.get") == 1
+
+
+def test_failed_first_attachment_does_not_shift_names(box, tmp_path, capsys):
+    fake, run = box
+    fake.store["m1"] = {**mail("m1", [{"filename": "a.pdf", "data": PDF, "fail": True},
+                                      {"filename": "b.pdf", "data": PDF2}]), "labels": {"INBOX"}}
+    out = tmp_path / "out"
+    assert run() != 0
+    assert files(out) == ["2026-11-08-m1-2.pdf"]
+    assert "failed to load: 2026-11-08-m1.pdf" in capsys.readouterr().out
+    fake.store["m1"]["attachments"][0]["fail"] = False      # Gmail works again
+    assert run() == 0
+    assert files(out) == ["2026-11-08-m1-2.pdf", "2026-11-08-m1.pdf"]
+    assert (out / "2026-11-08-m1.pdf").read_bytes() == PDF
+    assert (out / "2026-11-08-m1-2.pdf").read_bytes() == PDF2
+
+
+def test_attachments_without_a_name_are_saved(box, tmp_path):
+    fake, run = box
+    fake.store["m1"] = {**mail("m1", [
+        {"filename": "", "data": b"<p>big html body</p>", "mime": "text/html"},       # a body, not an attachment
+        {"filename": "", "data": PDF, "mime": "application/pdf", "disposition": 'attachment; size=40'},
+        {"filename": "", "data": PDF2, "mime": "application/pdf"},                      # only an attachmentId
+        {"filename": "", "data": b"x,y\n", "mime": "text/csv", "inline": True, "disposition": "attachment"},
+    ]), "labels": {"INBOX"}}
+    assert run() == 0
+    out = tmp_path / "out"
+    assert files(out) == ["2026-11-08-m1-2.pdf", "2026-11-08-m1-3.csv", "2026-11-08-m1.pdf"]
+    assert (out / "2026-11-08-m1.pdf").read_bytes() == PDF
+    assert (out / "2026-11-08-m1-2.pdf").read_bytes() == PDF2
+    only = tmp_path / "pdfs"
+    assert run("--pdf-only", to=only) == 0
+    assert files(only) == ["2026-11-08-m1-2.pdf", "2026-11-08-m1.pdf"]
+
+
+def test_saves_message_by_message_and_reports_a_failed_one(box, tmp_path, monkeypatch, capsys):
+    fake, run = box
+    fake.store.update({m["id"]: {**m, "labels": {"INBOX"}} for m in (
+        mail("m1", [{"filename": "a.pdf", "data": PDF}]),
+        mail("m2", [{"filename": "b.pdf", "data": PDF2, "fail": True}]),
+        mail("m3", [{"filename": "c.pdf", "data": PDF2}]),
+    )})
+    out = tmp_path / "out"
+    seen = {}
+    real = fake._attachment
+
+    def spy(mid, aid):
+        seen.setdefault(mid, files(out))
+        return real(mid, aid)
+
+    monkeypatch.setattr(fake, "_attachment", spy)
+    assert run() != 0
+    assert seen["m3"] == ["2026-11-08-m1.pdf"]       # m1 was on disk before m3 was fetched
+    assert files(out) == ["2026-11-08-m1.pdf", "2026-11-08-m3.pdf"]
+    assert "failed to load: 2026-11-08-m2.pdf" in capsys.readouterr().out
